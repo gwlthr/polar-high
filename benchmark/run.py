@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+from importlib.metadata import version
 from pathlib import Path
 
 
@@ -32,7 +33,7 @@ def _systemd_run_user_works() -> bool:
     or when invoking it as the current user fails (e.g. no user manager
     available).  In any of those cases the harness silently falls back
     to plain subprocesses and the ``cgroup_peak_mb`` column ends up
-    NaN — the ``peak_rss_mb`` column still works.
+    NaN: the ``peak_rss_mb`` column still works.
     """
     if shutil.which("systemd-run") is None:
         return False
@@ -74,7 +75,7 @@ def run_cell(
     # Wrap each cell in a fresh systemd-run --user --scope so the worker
     # gets its own cgroup.  The worker reads /proc/self/cgroup +
     # /sys/fs/cgroup/<path>/memory.peak just before exiting and reports
-    # ``cgroup_peak_mb`` — the kernel's cgroup-level peak, what the OOM
+    # ``cgroup_peak_mb``: the kernel's cgroup-level peak, what the OOM
     # killer would use against a memory budget.  Less noisy than the
     # process-level ``ru_maxrss`` we also report.  --collect tears the
     # scope down promptly after the child exits.
@@ -95,7 +96,7 @@ def run_cell(
     env = {**os.environ, **{var: str(threads) for var in THREAD_ENV_VARS}}
     if not use_cgroup_scope:
         # Without a fresh scope the worker would read the parent cgroup's
-        # memory.peak — meaningless cross-cell carry-over. Signal the
+        # memory.peak: meaningless cross-cell carry-over. Signal the
         # worker to skip the read.
         env["BENCH_SKIP_CGROUP_PEAK"] = "1"
     if time_limit is not None:
@@ -183,6 +184,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    pulp_major = version("pulp").split(".")[0] if {"pulp", "pulp_net"} & set(args.tools) else None
+
     use_scope = not args.no_cgroup_scope and _systemd_run_user_works()
     if not args.no_cgroup_scope and not use_scope:
         print(
@@ -242,7 +245,9 @@ def main() -> None:
                             use_cgroup_scope=use_scope,
                         )
                         row: dict = {
-                            "tool": tool,
+                            "tool": tool.replace("pulp", f"pulp{pulp_major}", 1)
+                            if tool in {"pulp", "pulp_net"}
+                            else tool,
                             "N": N,
                             "threads": threads,
                             "rep": rep,

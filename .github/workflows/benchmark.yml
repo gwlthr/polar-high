@@ -1,0 +1,137 @@
+name: benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      sizes:
+        description: Dense LP sizes (space separated)
+        default: "10 30 100 300"
+        required: true
+      network_sizes:
+        description: Network LP sizes (space separated)
+        default: "20 100 300"
+        required: true
+      repeats:
+        description: Repetitions per cell
+        default: "3"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      MPLBACKEND: Agg
+      GH_TOKEN: ${{ github.token }}
+      DENSE_SIZES: ${{ inputs.sizes }}
+      NETWORK_SIZES: ${{ inputs.network_sizes }}
+      REPEATS: ${{ inputs.repeats }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: benchmark/requirements.txt
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install -r benchmark/requirements.txt
+          python -m pip install --no-deps -e .
+
+      - name: Install the matching HiGHS executable
+        run: |
+          version=$(python -c 'from importlib.metadata import version; print(version("highspy"))')
+          archive="highs-${version}-x86_64-linux-gnu-static-mit.tar.gz"
+          gh release download "v${version}" --repo ERGO-Code/HiGHS --pattern "$archive" --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/highs"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/highs"
+          echo "$RUNNER_TEMP/highs/bin" >> "$GITHUB_PATH"
+
+      - name: Benchmark both PuLP series on the same runner
+        run: |
+          mkdir -p benchmark/results
+          { lscpu; python --version; highs --version; cat /etc/os-release; } > benchmark/results/hardware.txt
+          read -r -a sizes <<< "$DENSE_SIZES"
+          read -r -a network_sizes <<< "$NETWORK_SIZES"
+          tools=(polar polar_sm linopy pyomo pulp)
+          network_tools=(polar_net polar_sm_net linopy_net pyomo_net pulp_net)
+          append=()
+          for major in 4 3; do
+            python -m pip install --upgrade "pulp>=${major},<$((major + 1))"
+            python -m pip freeze > "benchmark/results/environment-pulp${major}.txt"
+            # Catch solver/API failures before time-limited cells can hide them.
+            PYTHONPATH=benchmark python - <<'PY'
+          from models import pulp, pulp_net
+          for module, n in ((pulp, 10), (pulp_net, 20)):
+              optimal, obj = module.solve(module.build(n))
+              assert optimal, f"{module.__name__} failed to solve"
+              if module is pulp:
+                  assert abs(obj - n * n * (n + 1)) < 1e-6
+          PY
+            python benchmark/run.py --tools "${tools[@]}" --sizes "${sizes[@]}" \
+              --threads 1 --repeats "$REPEATS" --timeout 600 --no-cgroup-scope \
+              "${append[@]}" --out benchmark/results/dense_fullsolve.csv
+            python benchmark/run.py --tools "${tools[@]}" --sizes "${sizes[@]}" \
+              --threads 1 --repeats "$REPEATS" --timeout 600 --no-cgroup-scope --time-limit 1e-6 \
+              "${append[@]}" --out benchmark/results/dense_buildonly.csv
+            python benchmark/run.py --tools "${network_tools[@]}" --sizes "${network_sizes[@]}" \
+              --threads 1 --repeats "$REPEATS" --timeout 600 --no-cgroup-scope --time-limit 1e-6 \
+              "${append[@]}" --out benchmark/results/network_buildonly.csv
+            tools=(pulp)
+            network_tools=(pulp_net)
+            append=(--append)
+          done
+
+      - name: Validate results and plot
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+          for path in Path("benchmark/results").glob("*.csv"):
+              df = pd.read_csv(path)
+              assert not df.empty, f"{path}: no results"
+              assert np.isfinite(df[["build_s", "solve_s", "peak_rss_mb"]]).all().all(), f"{path}: failed cells"
+              suffix = "_net" if path.name.startswith("network") else ""
+              assert {f"pulp3{suffix}", f"pulp4{suffix}"} <= set(df.tool), f"{path}: missing PuLP series"
+              if path.name == "dense_fullsolve.csv":
+                  assert df.optimal.all(), f"{path}: non-optimal cells"
+                  assert np.allclose(df.obj, df.N * df.N * (df.N + 1), rtol=1e-6), f"{path}: objective mismatch"
+          PY
+          python benchmark/plot.py \
+            --in benchmark/results/dense_fullsolve.csv \
+            --in-buildonly benchmark/results/dense_buildonly.csv \
+            --in-network benchmark/results/network_buildonly.csv \
+            --out-main benchmark/results/benchmark.png \
+            --out-replication benchmark/results/benchmark_replication.png \
+            --out-network benchmark/results/benchmark_network.png
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark/results/
+          if-no-files-found: ignore
+
+      - name: Publish public release assets
+        run: |
+          tag="benchmark-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          base="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases"
+          {
+            echo "Benchmark of commit ${GITHUB_SHA} on ubuntu-24.04, Python 3.12, one thread."
+            echo ""
+            echo "Dense sizes: ${DENSE_SIZES}. Network sizes: ${NETWORK_SIZES}. Repeats: ${REPEATS}."
+            echo ""
+            for asset in benchmark/results/*; do
+              name=$(basename "$asset")
+              echo "- [${name}](${base}/download/${tag}/${name})"
+            done
+          } > "$RUNNER_TEMP/benchmark-notes.md"
+          gh release create "$tag" benchmark/results/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Benchmark ${GITHUB_RUN_ID} (attempt ${GITHUB_RUN_ATTEMPT})" \
+            --notes-file "$RUNNER_TEMP/benchmark-notes.md" --prerelease --latest=false
+          echo "[Public benchmark results](${base}/tag/${tag})" >> "$GITHUB_STEP_SUMMARY"
