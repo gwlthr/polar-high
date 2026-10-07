@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import shutil
 
-from pulp import HiGHS_CMD, LpMinimize, LpProblem, LpStatusOptimal, lpSum_vars_coefs, value
+from ._pulp_compat import HiGHS_CMD, LpMinimize, LpProblem, LpStatusOptimal, lpSum_vars_coefs, value
 
 
 def build(N: int) -> LpProblem:
@@ -45,7 +45,7 @@ def solve(model: LpProblem, time_limit: float | None = None) -> tuple[bool, floa
         status = model.solve(_highs_cmd(time_limit))
     except Exception:
         return False, float("nan")
-    optimal = status == LpStatusOptimal
+    optimal = getattr(status, "status", status) == LpStatusOptimal
     try:
         raw = value(model.objective)
         obj = float("nan") if raw is None else float(raw)

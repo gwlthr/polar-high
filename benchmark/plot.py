@@ -2,13 +2,13 @@
 
 Reads benchmark/results/*.csv and writes:
 
-  * docs/assets/benchmark.png            — N-sweep, threads=1 where
+  * docs/assets/benchmark.png           : N-sweep, threads=1 where
                                             available, full HiGHS solve.
-  * docs/assets/benchmark_threads.png    — fixed N, sweep across thread
+  * docs/assets/benchmark_threads.png   : fixed N, sweep across thread
                                             counts (linear x-axis).
-  * docs/assets/benchmark_buildonly.png  — N-sweep, HiGHS short-circuited
+  * docs/assets/benchmark_buildonly.png : N-sweep, HiGHS short-circuited
                                             via time_limit=1e-6.
-  * docs/assets/benchmark_network.png    — N-sweep on the irregular
+  * docs/assets/benchmark_network.png   : N-sweep on the irregular
                                             network-flow LP (separate
                                             CSV, separate scale).
 
@@ -93,16 +93,24 @@ TOOL_LABELS = {
     "pyomo_net": "Pyomo",
     "pulp_net": "PuLP (HiGHS_CMD)",
 }
+# Keep legacy PuLP rows readable while plotting new runs by major version.
+for base in ("pulp", "pulp_net"):
+    for major, style, marker in ((3, "--", "v"), (4, "-", "^")):
+        tool = base.replace("pulp", f"pulp{major}", 1)
+        TOOL_COLORS[tool] = TOOL_COLORS[base]
+        TOOL_LINESTYLES[tool] = style
+        TOOL_MARKERS[tool] = marker
+        TOOL_LABELS[tool] = f"PuLP {major}.x (HiGHS_CMD)"
 # ``polar_da`` is omitted from the dense plots: on the dense LP the
 # block-COO dense-axis arm overlays polar regular almost exactly, so
 # adding the line just clutters the figure. On the network LP the
 # irregular topology surfaces a real (small) difference, so
 # ``polar_da_net`` stays in TOOL_ORDER_NET.
-TOOL_ORDER_DENSE = ["polar", "polar_sm", "linopy", "pyomo", "pulp"]
-# Threads figure drops Pyomo (single-threaded by design — a flat line that
+TOOL_ORDER_DENSE = ["polar", "polar_sm", "linopy", "pyomo", "pulp", "pulp3", "pulp4"]
+# Threads figure drops Pyomo (single-threaded by design: a flat line that
 # only clutters a thread-scaling plot) and reads cleaner on a linear y-axis.
-TOOL_ORDER_THREADS = ["polar", "polar_sm", "linopy", "pulp"]
-TOOL_ORDER_NET = ["polar_net", "polar_sm_net", "polar_da_net", "linopy_net", "pyomo_net", "pulp_net"]
+TOOL_ORDER_THREADS = ["polar", "polar_sm", "linopy", "pulp", "pulp3", "pulp4"]
+TOOL_ORDER_NET = ["polar_net", "polar_sm_net", "polar_da_net", "linopy_net", "pyomo_net", "pulp_net", "pulp3_net", "pulp4_net"]
 
 
 def _load_all(in_csv_glob: list[str]) -> pd.DataFrame:
@@ -119,14 +127,14 @@ def _load_all(in_csv_glob: list[str]) -> pd.DataFrame:
     if "threads" not in df.columns:
         df["threads"] = -1
     # Legacy data may still carry the now-removed ``polar_lean`` /
-    # ``polar_lean_net`` tool ids — fold them into the canonical
+    # ``polar_lean_net`` tool ids: fold them into the canonical
     # ``polar`` / ``polar_net`` since the lean settings are now the
     # engine defaults.  The block-COO dense-axis arm (``polar_da``) is
     # on track to become the dense default in a future release, so on
     # the dense plots we fold its rows into ``polar`` and let the later
     # ``drop_duplicates(keep="last")`` prefer them over the legacy
     # ``polar`` rows that landed earlier in the CSV.  ``polar_da_net``
-    # is left alone — the network plot keeps it as a distinct series.
+    # is left alone: the network plot keeps it as a distinct series.
     df["tool"] = df["tool"].replace(
         {
             "polar_lean": "polar",
@@ -167,7 +175,7 @@ def _shared_limits(*aggs: pd.DataFrame) -> dict:
     Returns: {"time_s": (lo, hi), "peak_rss_mb": (lo, hi)}
 
     ``time_s`` is the shared y-range for the build / solve / total
-    panels — all in seconds, on the same log axis so values are
+    panels: all in seconds, on the same log axis so values are
     eyeball-comparable.
 
     ``peak_rss_mb`` is also log-scaled (consistent with the time
@@ -253,7 +261,7 @@ def _draw_three_panels(
     axes[0].legend(loc="best", fontsize=9)
 
     fig.suptitle(
-        f"polar-high vs linopy vs Pyomo — LP benchmark {title_suffix}",
+        f"polar-high vs linopy vs Pyomo vs PuLP: LP benchmark {title_suffix}",
         y=1.02,
         fontsize=11,
     )
@@ -324,7 +332,7 @@ def _draw_threading_benefit(
     axes[0].legend(loc="best", fontsize=9)
 
     fig.suptitle(
-        "polar-high vs linopy — network LP, threading benefit on polars",
+        "polar-high vs linopy: network LP, threading benefit on polars",
         y=1.02,
         fontsize=11,
     )
@@ -347,10 +355,10 @@ def _draw_two_panels(
     y_log: bool = True,
     y_limits: dict | None = None,
     time_panel_title: str = "Time in build() + solve()",
-    title_prefix: str = "polar-high vs linopy vs Pyomo",
+    title_prefix: str = "polar-high vs linopy vs Pyomo vs PuLP",
 ) -> None:
     """2-panel layout: total_s (build+solve) | peak_rss_mb. The total
-    is the apples-to-apples cross-tool measurement — each tool draws
+    is the apples-to-apples cross-tool measurement: each tool draws
     the build/solve boundary in a different place, so summing the two
     is what's meaningful to compare."""
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.6), sharex=True)
@@ -390,7 +398,7 @@ def _draw_two_panels(
     axes[0].legend(loc="best", fontsize=9)
 
     fig.suptitle(
-        f"{title_prefix} — LP benchmark {title_suffix}",
+        f"{title_prefix}: LP benchmark {title_suffix}",
         y=1.02,
         fontsize=11,
     )
@@ -462,7 +470,7 @@ def main() -> None:
         default=str(REPO_ROOT / "docs" / "assets" / "benchmark_threading_benefit.png"),
         help=(
             "Three-line figure (polar @1 thread, polar @32 threads, "
-            "linopy @1 thread) on the network LP — shows where polars's "
+            "linopy @1 thread) on the network LP: shows where polars's "
             "parallelism starts paying."
         ),
     )
@@ -486,7 +494,7 @@ def main() -> None:
 
     # Threading: read from the *build-only* CSV at a fixed N. We use
     # build-only because the threads scaling story is about the
-    # modelling layer, not HiGHS — HiGHS is single-threaded the same
+    # modelling layer, not HiGHS: HiGHS is single-threaded the same
     # way everywhere. N=300 is small enough that pyomo can run at
     # every thread count cheaply, but big enough to amortize startup.
     df_thr_src = _load_all(list(args.in_buildonly))
@@ -501,7 +509,7 @@ def main() -> None:
         agg_thr = pd.DataFrame()
         N_thr = None
 
-    # Build-only — apply the same lowest-threads-per-cell rule so the
+    # Build-only: apply the same lowest-threads-per-cell rule so the
     # headline figure cleanly reflects threads=1 (single-thread) data
     # for polar and linopy, threads=32 (= threads=1 effectively) for
     # Pyomo. Without this the median would mix threads=1 and 32 reps.
@@ -519,7 +527,7 @@ def main() -> None:
     y_lims = _shared_limits(agg_main, agg_thr, agg_b)
 
     # Headline figure: build-only (HiGHS short-circuited). This
-    # isolates the modelling-layer cost — HiGHS is identical across
+    # isolates the modelling-layer cost: HiGHS is identical across
     # all three tools, so the build-only timing IS the comparison
     # we actually care about.
     if not agg_b.empty:
@@ -527,7 +535,7 @@ def main() -> None:
             agg_b,
             x_col="N",
             x_label="N (variable grid is N × N)",
-            title_suffix=("(build-only — HiGHS time-limited to ~1 µs; modelling-layer cost only)"),
+            title_suffix=("(build-only: HiGHS time-limited to ~1 µs; modelling-layer cost only)"),
             out_path=Path(args.out_main),
             tool_order=TOOL_ORDER_DENSE,
             y_limits=y_lims,
@@ -579,7 +587,7 @@ def main() -> None:
             agg_net,
             x_col="N",
             x_label="N (nodes; edges = 5·N, T = 168)",
-            title_suffix=("(network LP — irregular topology, build-only, 1 thread)"),
+            title_suffix=("(network LP: irregular topology, build-only, 1 thread)"),
             out_path=Path(args.out_network),
             tool_order=TOOL_ORDER_NET,
             y_limits=y_lims_net,
